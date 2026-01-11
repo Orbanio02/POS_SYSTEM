@@ -20,7 +20,9 @@
 
     {{-- ✅ FIX 2: Hide content until Alpine is ready (prevents flicker) --}}
     <style>
-        [x-cloak] { display: none !important; }
+        [x-cloak] {
+            display: none !important;
+        }
     </style>
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
@@ -436,7 +438,10 @@
 
             // Watch for class changes (works no matter which toggle is used)
             const observer = new MutationObserver(() => syncThemeStorage());
-            observer.observe(html, { attributes: true, attributeFilter: ['class'] });
+            observer.observe(html, {
+                attributes: true,
+                attributeFilter: ['class']
+            });
         })();
     </script>
 
@@ -478,6 +483,31 @@
             @endif
         });
     </script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            @if (session('success'))
+                Swal.fire({
+                    ...
+                });
+            @endif
+
+            @if (session('error'))
+                Swal.fire({
+                    ...
+                });
+            @endif
+
+            @if (session('stock_error'))
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Insufficient Stock',
+                    text: @json(session('stock_error')),
+                    confirmButtonColor: '#dc2626'
+                });
+            @endif
+        });
+    </script>
+
 
 </body>
 

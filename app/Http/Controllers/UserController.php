@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -11,36 +12,56 @@ use Spatie\Permission\Models\Role;
 class UserController extends Controller
 {
     /**
-     * Only allow SUPERADMIN to see user list.
-     * (Extra protection even if routes already restrict.)
+     * SUPERADMIN ONLY
      */
-    public function index()
+    public function index(Request $request)
     {
         abort_unless(Auth::user()->hasRole('superadmin'), 403);
 
-        $users = User::with('roles')->latest()->get();
-        return view('users.index', compact('users'));
+        $search = $request->input('search');
+
+        $users = User::with('roles')
+            ->when($search, function ($query) use ($search) {
+                $query->where('name', 'like', '%' . $search . '%');
+            })
+            ->get()
+            ->sortBy(function ($user) {
+                $role = $user->roles->pluck('name')->first();
+
+                return match ($role) {
+                    'superadmin' => 1,
+                    'admin' => 2,
+                    'client' => 3,
+                    default => 4,
+                };
+            });
+
+        return view('users.index', compact('users', 'search'));
     }
 
     /**
-     * Create form — roles are filtered here
+     * ADMIN + SUPERADMIN
+     * Create client accounts
      */
     public function create()
     {
         $roles = $this->allowedRolesFor(Auth::user());
-
         abort_if($roles->isEmpty(), 403);
 
-        return view('users.create', compact('roles'));
+        $products = Auth::user()->hasAnyRole(['superadmin', 'admin'])
+            ? Product::orderBy('name')->get()
+            : collect();
+
+        return view('users.create', compact('roles', 'products'));
     }
 
     /**
-     * Store user — role is validated AND enforced server-side
+     * STORE USER
+     * Admin + Superadmin
      */
     public function store(Request $request)
     {
         $roles = $this->allowedRolesFor(Auth::user());
-
         abort_if($roles->isEmpty(), 403);
 
         $data = $request->validate([
@@ -48,9 +69,10 @@ class UserController extends Controller
             'email' => 'required|email|unique:users,email',
             'password' => 'required|string|min:8|confirmed',
             'role' => 'required|string|exists:roles,name',
+            'products' => 'array',
+            'products.*' => 'exists:products,id',
         ]);
 
-        // ✅ HARD BLOCK: prevent assigning roles not allowed (even if HTML is edited)
         abort_unless($roles->contains($data['role']), 403);
 
         $user = User::create([
@@ -61,106 +83,103 @@ class UserController extends Controller
 
         $user->assignRole($data['role']);
 
-        // If admin can't access users.index, redirect safely somewhere else
-        if (!Auth::user()->hasRole('superadmin')) {
-            return redirect()->route('dashboard')->with('success', 'User created successfully.');
+        if (
+            Auth::user()->hasAnyRole(['superadmin', 'admin']) &&
+            $data['role'] === 'client'
+        ) {
+            $sync = collect($data['products'] ?? [])
+                ->mapWithKeys(fn($id) => [
+                    $id => ['assigned_by' => Auth::id()]
+                ])
+                ->toArray();
+
+            $user->products()->sync($sync);
         }
 
-        return redirect()->route('users.index')->with('success', 'User created successfully.');
+        return Auth::user()->hasRole('superadmin')
+            ? redirect()->route('users.index')->with('success', 'User created successfully.')
+            : redirect()->route('dashboard')->with('success', 'Client created successfully.');
     }
 
     /**
-     * Edit form — roles are filtered here too
+     * EDIT — SUPERADMIN ONLY
      */
     public function edit(User $user)
     {
-        $authUser = Auth::user();
+        abort_unless(Auth::user()->hasRole('superadmin'), 403);
 
-        // Admin should never be able to edit superadmin accounts
-        if ($authUser->hasRole('admin') && $user->hasRole('superadmin')) {
-            abort(403);
-        }
+        $roles = $this->allowedRolesFor(Auth::user());
 
-        $roles = $this->allowedRolesFor($authUser);
+        $products = $user->hasRole('client')
+            ? Product::orderBy('name')->get()
+            : collect();
 
-        abort_if($roles->isEmpty(), 403);
-
-        return view('users.edit', compact('user', 'roles'));
+        return view('users.edit', compact('user', 'roles', 'products'));
     }
 
     /**
-     * Update user — role is validated AND enforced server-side
-     * ✅ New update: Superadmin can optionally reset/set user password.
+     * UPDATE — SUPERADMIN ONLY
      */
     public function update(Request $request, User $user)
     {
-        $authUser = Auth::user();
-
-        // Admin should never be able to edit superadmin accounts
-        if ($authUser->hasRole('admin') && $user->hasRole('superadmin')) {
-            abort(403);
-        }
-
-        $roles = $this->allowedRolesFor($authUser);
-
-        abort_if($roles->isEmpty(), 403);
+        abort_unless(Auth::user()->hasRole('superadmin'), 403);
 
         $rules = [
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email,' . $user->id,
             'role' => 'required|string|exists:roles,name',
+            'password' => 'nullable|string|min:8|confirmed',
+            'products' => 'array',
+            'products.*' => 'exists:products,id',
         ];
-
-        // ✅ Only superadmin can set/reset password
-        if ($authUser->hasRole('superadmin')) {
-            $rules['password'] = 'nullable|string|min:8|confirmed';
-        }
 
         $data = $request->validate($rules);
 
-        // ✅ HARD BLOCK: prevent role promotion / forbidden role changes
-        abort_unless($roles->contains($data['role']), 403);
-
-        $updateData = [
+        $user->update([
             'name' => $data['name'],
             'email' => $data['email'],
-        ];
-
-        // ✅ Update password only if superadmin provided a new one
-        if ($authUser->hasRole('superadmin') && !empty($data['password'])) {
-            $updateData['password'] = Hash::make($data['password']);
-        }
-
-        $user->update($updateData);
+            ...(!empty($data['password'])
+                ? ['password' => Hash::make($data['password'])]
+                : []),
+        ]);
 
         $user->syncRoles([$data['role']]);
 
-        // If admin can't access users.index, redirect safely somewhere else
-        if (!$authUser->hasRole('superadmin')) {
-            return redirect()->route('dashboard')->with('success', 'User updated successfully.');
+        if ($user->hasRole('client')) {
+            $sync = collect($data['products'] ?? [])
+                ->mapWithKeys(fn($id) => [
+                    $id => ['assigned_by' => Auth::id()]
+                ])
+                ->toArray();
+
+            $user->products()->sync($sync);
         }
 
         return redirect()->route('users.index')->with('success', 'User updated successfully.');
     }
 
     /**
-     * Delete user — keep as-is unless you want admin-only restrictions.
+     * DELETE USER — SUPERADMIN ONLY
      */
     public function destroy(User $user)
     {
-        if ($user->id === auth()->id()) {
-            return back()->with('error', 'You cannot delete yourself.');
+        abort_unless(Auth::user()->hasRole('superadmin'), 403);
+
+        if ($user->id === Auth::id()) {
+            return redirect()->route('users.index')->with('error', 'You cannot delete your own account.');
         }
 
+        \DB::table('product_user')
+            ->where('assigned_by', $user->id)
+            ->update(['assigned_by' => null]);
+
         $user->delete();
-        return back()->with('success', 'User deleted.');
+
+        return redirect()->route('users.index')->with('success', 'User deleted successfully.');
     }
 
     /**
-     * ✅ Role filtering logic
-     * - superadmin => all roles
-     * - admin => only client
-     * - others => none
+     * ROLE FILTERING
      */
     private function allowedRolesFor(User $user)
     {
@@ -169,7 +188,7 @@ class UserController extends Controller
         }
 
         if ($user->hasRole('admin')) {
-            return Role::whereIn('name', ['client'])->orderBy('name')->pluck('name');
+            return Role::whereIn('name', ['client'])->pluck('name');
         }
 
         return collect();

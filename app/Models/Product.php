@@ -34,4 +34,14 @@ class Product extends Model
     {
         return $query->whereColumn('stock_quantity', '<=', 'low_stock_threshold');
     }
+
+    /* ============================
+       Assigned clients
+    ============================ */
+    public function clients()
+    {
+        return $this->belongsToMany(User::class)
+            ->withPivot('assigned_by')
+            ->withTimestamps();
+    }
 }

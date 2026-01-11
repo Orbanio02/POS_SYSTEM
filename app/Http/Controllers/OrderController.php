@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\PaymentMethod;
 use App\Models\Product;
+use App\Models\TransactionStatusNote; // ✅ ONLY NEW IMPORT
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -37,8 +38,6 @@ class OrderController extends Controller
 
     /**
      * ✅ PAYMENT HISTORY (CLIENTS SEE OWN ONLY)
-     * - non-admin users see only their own orders/payments
-     * - admin/superadmin can see all (same rule style as index)
      */
     public function paymentHistory()
     {
@@ -47,7 +46,6 @@ class OrderController extends Controller
         $query = Order::with(['payment'])
             ->latest();
 
-        // ✅ Strong rule: non-admin users can only see their own payment history
         if (!$user->hasAnyRole(['admin', 'superadmin'])) {
             $query->where('user_id', $user->id);
         }
@@ -68,7 +66,6 @@ class OrderController extends Controller
     {
         $user = Auth::user();
 
-        // ✅ Strong rule: non-admin users can ONLY view own orders
         if (!$user->hasAnyRole(['admin', 'superadmin']) && $order->user_id !== $user->id) {
             abort(403);
         }
@@ -85,25 +82,20 @@ class OrderController extends Controller
     }
 
     /**
-     * ✅ RECEIPT PAGE (print-friendly)
-     * - non-admin can print only own approved orders
-     * - admin/superadmin can print any approved order
+     * ✅ RECEIPT PAGE
      */
     public function receipt(Order $order, Request $request)
     {
         $user = Auth::user();
 
-        // ✅ Strong rule: non-admin users can ONLY access own receipt
         if (!$user->hasAnyRole(['admin', 'superadmin']) && $order->user_id !== $user->id) {
             abort(403);
         }
 
         $order->load(['items.product', 'payment', 'user']);
 
-        // Only allow receipt if payment is approved
         abort_if(!$order->payment || $order->payment->status !== 'approved', 403);
 
-        // date to display
         $receiptDate = $order->payment->paid_at ?? $order->created_at;
 
         return view('orders.receipt', [
@@ -136,26 +128,24 @@ class OrderController extends Controller
     {
         $user = Auth::user();
 
-        // Only admin & superadmin can update order status
         if (!$user->hasAnyRole(['admin', 'superadmin'])) {
             abort(403);
         }
 
         $request->validate([
             'status' => 'required|in:pending,approved,rejected',
+            'note' => 'required|string|min:3',
         ]);
 
         DB::transaction(function () use ($request, $order) {
-            // Lock order row to prevent double updates under concurrency
-            $order = Order::whereKey($order->id)->lockForUpdate()->first();
 
+            $order = Order::whereKey($order->id)->lockForUpdate()->first();
             $order->load(['payment', 'items']);
 
             if (!$order->payment) {
                 abort(400, 'No payment found for this order.');
             }
 
-            // ✅ If rejected: return stocks ONCE
             if ($request->status === 'rejected' && is_null($order->inventory_reverted_at)) {
                 foreach ($order->items as $item) {
                     Product::whereKey($item->product_id)
@@ -166,13 +156,19 @@ class OrderController extends Controller
                 $order->save();
             }
 
-            // Update payment status
             $order->payment->update([
                 'status' => $request->status,
             ]);
+
+            // ✅ STATUS NOTE (NEW FEATURE ONLY)
+            TransactionStatusNote::create([
+                'transaction_id' => $order->payment->id,
+                'status' => $request->status,
+                'note' => $request->note,
+                'created_by' => Auth::id(),
+            ]);
         });
 
-        // ✅ if approved -> go to receipt and auto print
         if ($request->status === 'approved') {
             return redirect()
                 ->route('orders.receipt', ['order' => $order->id, 'autoprint' => 1])

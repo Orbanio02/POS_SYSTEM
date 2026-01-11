@@ -20,4 +20,14 @@ class User extends Authenticatable
         'password',
         'remember_token',
     ];
+
+    /* ============================
+       Product access (CLIENT ONLY)
+    ============================ */
+    public function products()
+    {
+        return $this->belongsToMany(Product::class)
+            ->withPivot('assigned_by')
+            ->withTimestamps();
+    }
 }

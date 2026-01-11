@@ -11,7 +11,8 @@ use App\Http\Controllers\{
     UserController,
     InventoryLogController,
     PaymentController,
-    PaymentMethodController
+    PaymentMethodController,
+    BankAccountController,
 };
 
 Route::get('/', function () {
@@ -99,7 +100,27 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/payment-methods', [PaymentMethodController::class, 'index'])->name('methods.index');
     Route::post('/payment-methods', [PaymentMethodController::class, 'store'])->name('methods.store');
     Route::patch('/payment-methods/{method}/toggle', [PaymentMethodController::class, 'toggle'])->name('methods.toggle');
+    Route::patch('/payment-methods/{method}/instructions', [PaymentMethodController::class, 'updateInstructions'])->name('methods.instructions');
     Route::delete('/payment-methods/{method}', [PaymentMethodController::class, 'destroy'])->name('methods.destroy');
+
+    // Bank Accounts (SUPERADMIN enforced inside controller)
+    Route::post('/bank-accounts', [BankAccountController::class, 'store'])
+        ->name('bank-accounts.store');
+
+    Route::patch('/bank-accounts/{bankAccount}/toggle', [BankAccountController::class, 'toggle'])
+        ->name('bank-accounts.toggle');
+
+    Route::delete('/bank-accounts/{bankAccount}', [BankAccountController::class, 'destroy'])
+        ->name('bank-accounts.destroy');
+
+    // Edit Bank Account
+    Route::get('/bank-accounts/{bankAccount}/edit', [BankAccountController::class, 'edit'])
+        ->name('bank-accounts.edit');
+
+    Route::patch('/bank-accounts/{bankAccount}', [BankAccountController::class, 'update'])
+        ->name('bank-accounts.update');
+
+
 });
 
 require __DIR__ . '/auth.php';

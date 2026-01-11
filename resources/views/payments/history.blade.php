@@ -5,7 +5,7 @@
 
         <div class="flex items-center justify-between">
             <div>
-                <h1 class="text-2xl font-bold ">Payment History</h1>
+                <h1 class="text-2xl font-bold ">Order History</h1>
                 <p class="text-sm text-gray-500 dark:text-gray-400">
                     Your payment and order history.
                 </p>
